@@ -1,0 +1,504 @@
+name: Build J2 iBridge APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Android SDK
+        run: |
+          (yes || true) | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-33" "build-tools;33.0.2"
+
+      - name: Generate Project Files
+        run: |
+          mkdir -p app/src/main/java/com/example/j2ibridge
+          mkdir -p app/src/main/res/xml
+          mkdir -p app/src/main/assets
+
+          cat << 'EOF' > settings.gradle
+          rootProject.name = "J2iBridge"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:7.3.1'
+                  classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.6.21'
+              }
+          }
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2048m
+          EOF
+
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+          android {
+              namespace 'com.example.j2ibridge'
+              compileSdk 33
+              defaultConfig {
+                  applicationId "com.example.j2ibridge"
+                  minSdk 21
+                  targetSdk 22
+                  versionCode 1
+                  versionName "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+              kotlinOptions {
+                  jvmTarget = '1.8'
+              }
+          }
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.3.1'
+              implementation 'org.nanohttpd:nanohttpd:2.3.1'
+              implementation 'org.nanohttpd:nanohttpd-websocket:2.3.1'
+              implementation 'com.google.zxing:core:3.4.1'
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/res/xml/ussd_config.xml
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:packageNames="com.android.phone"
+              android:canRetrieveWindowContent="true"
+              android:notificationTimeout="100" />
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.BLUETOOTH" />
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+              <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+              <uses-permission android:name="android.permission.CALL_PHONE" />
+              <uses-permission android:name="android.permission.RECEIVE_SMS" />
+              <uses-permission android:name="android.permission.READ_SMS" />
+              <uses-permission android:name="android.permission.SEND_SMS" />
+              <uses-permission android:name="android.permission.READ_CONTACTS" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+              <application
+                  android:allowBackup="true"
+                  android:label="J2 iBridge"
+                  android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service android:name=".J2BridgeService" android:exported="false" />
+                  <service
+                      android:name=".UssdService"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data android:name="android.accessibilityservice" android:resource="@xml/ussd_config" />
+                  </service>
+                  <receiver android:name=".EventReceiver" android:exported="true">
+                      <intent-filter android:priority="999">
+                          <action android:name="android.intent.action.PHONE_STATE" />
+                          <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+                      </intent-filter>
+                  </receiver>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/assets/client.html
+          <!DOCTYPE html>
+          <html lang="fa" dir="rtl">
+          <head>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <meta name="apple-mobile-web-app-capable" content="yes" />
+            <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+            <title>J2 iBridge</title>
+            <style>
+              :root { --bg:#000; --card:#1c1c1e; --card2:#2c2c2e; --blue:#0a84ff; --green:#30d158; --red:#ff453a; --sub:#8e8e93; }
+              * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+              body { font-family:-apple-system,sans-serif; background:var(--bg); color:#fff; margin:0; padding:14px 14px 85px; }
+              .top { display:flex; justify-content:space-between; align-items:center; background:var(--card); padding:12px 14px; border-radius:16px; margin-bottom:12px; font-size:13px; }
+              .pill { padding:4px 10px; border-radius:99px; font-weight:600; font-size:12px; }
+              .on { background:rgba(48,209,88,.2); color:var(--green); }
+              .off { background:rgba(255,69,58,.2); color:var(--red); }
+              .sims { display:flex; gap:8px; margin-bottom:12px; }
+              .sim { flex:1; padding:10px; border-radius:12px; border:1px solid #3a3a3c; background:var(--card2); color:#fff; font-weight:600; }
+              .sim.active { border-color:var(--blue); background:rgba(10,132,255,.2); color:var(--blue); }
+              .card { background:var(--card); border-radius:18px; padding:16px; margin-bottom:12px; }
+              .dial-box { width:100%; background:transparent; border:none; color:#fff; font-size:30px; font-weight:600; text-align:center; direction:ltr; margin:6px 0 14px; outline:none; }
+              .pad { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; max-width:290px; margin:0 auto 14px; direction:ltr; }
+              .k { height:60px; border-radius:30px; background:var(--card2); border:none; color:#fff; font-size:24px; }
+              .btn { width:100%; padding:14px; border-radius:14px; border:none; font-size:16px; font-weight:600; color:#fff; }
+              .green { background:var(--green); color:#000; } .blue { background:var(--blue); } .red { background:var(--red); }
+              input.f, textarea.f { width:100%; background:var(--card2); border:none; border-radius:12px; padding:12px; color:#fff; font-size:15px; margin-bottom:10px; }
+              .sms { background:var(--card2); border-radius:14px; padding:12px; margin-bottom:10px; }
+              .otp { margin-top:8px; padding:6px 12px; background:rgba(10,132,255,.25); color:var(--blue); border:none; border-radius:8px; font-weight:600; }
+              .tabs { position:fixed; bottom:0; left:0; right:0; background:rgba(28,28,30,.95); display:flex; border-top:1px solid #38383a; padding:10px 0 22px; }
+              .tab { flex:1; background:none; border:none; color:var(--sub); font-size:13px; }
+              .tab.active { color:var(--blue); font-weight:700; }
+              .sec { display:none; } .sec.active { display:block; }
+              #modal { display:none; position:fixed; inset:0; background:#000; z-index:99; flex-direction:column; justify-content:space-between; padding:60px 24px; text-align:center; }
+            </style>
+          </head>
+          <body>
+            <div class="top">
+              <div><span id="st" class="pill off">در حال اتصال...</span> <span id="bat" style="color:var(--sub);margin-right:6px;">باتری: --%</span></div>
+              <button onclick="unlockSound()" style="background:var(--card2);color:var(--green);border:none;padding:6px 10px;border-radius:10px;font-size:12px;">فعال‌سازی زنگ</button>
+            </div>
+            <div id="simBar" class="sims"></div>
+            <div id="t-dial" class="sec active">
+              <div class="card">
+                <input id="num" class="dial-box" type="tel" placeholder="شماره یا کد *100#" />
+                <div class="pad">
+                  <button class="k" onclick="add('1')">1</button><button class="k" onclick="add('2')">2</button><button class="k" onclick="add('3')">3</button>
+                  <button class="k" onclick="add('4')">4</button><button class="k" onclick="add('5')">5</button><button class="k" onclick="add('6')">6</button>
+                  <button class="k" onclick="add('7')">7</button><button class="k" onclick="add('8')">8</button><button class="k" onclick="add('9')">9</button>
+                  <button class="k" onclick="add('*')">*</button><button class="k" onclick="add('0')">0</button><button class="k" onclick="add('#')">#</button>
+                </div>
+                <div style="display:flex;gap:8px;">
+                  <button class="btn green" onclick="dial()">تماس / اجرای کد</button>
+                  <button class="btn" style="background:var(--card2);width:76px;" onclick="del()">⌫</button>
+                </div>
+                <div id="ussdBox" style="display:none;margin-top:12px;background:var(--card2);padding:12px;border-radius:12px;font-size:14px;line-height:1.6;"></div>
+              </div>
+            </div>
+            <div id="t-sms" class="sec">
+              <div class="card">
+                <input id="to" class="f" type="tel" placeholder="شماره گیرنده..." dir="ltr" />
+                <textarea id="txt" class="f" rows="3" placeholder="متن پیامک فارسی..."></textarea>
+                <button class="btn blue" onclick="sendSms()">ارسال پیامک</button>
+              </div>
+              <div id="smsList"></div>
+            </div>
+            <div id="modal">
+              <div><div style="color:var(--sub);">تماس ورودی روی سامسونگ J2</div><h1 id="cName" style="font-size:32px;margin:16px 0;">---</h1><div id="cNum" style="color:var(--sub);direction:ltr;"></div></div>
+              <div style="display:flex;gap:14px;"><button class="btn green" onclick="act('ANSWER')">پاسخ</button><button class="btn red" onclick="act('REJECT')">رد تماس</button></div>
+            </div>
+            <div class="tabs">
+              <button class="tab active" onclick="tab('dial',this)">شماره‌گیر و USSD</button>
+              <button class="tab" onclick="tab('sms',this)">پیامک‌ها</button>
+            </div>
+          <script>
+            let ws, slot=0, subId=-1, sims=[], actx, ring;
+            function tab(n,el){ document.querySelectorAll('.sec').forEach(s=>s.classList.remove('active')); document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active')); document.getElementById('t-'+n).classList.add('active'); el.classList.add('active'); }
+            function add(c){ document.getElementById('num').value+=c; }
+            function del(){ const e=document.getElementById('num'); e.value=e.value.slice(0,-1); }
+            function unlockSound(){ actx=new (window.AudioContext||window.webkitAudioContext)(); actx.resume(); alert('صدای زنگ آیفون فعال شد'); }
+            function startRing(){ if(!actx)return; stopRing(); ring=setInterval(()=>{ const o=actx.createOscillator(),g=actx.createGain(); o.frequency.value=800; g.gain.value=.3; o.connect(g); g.connect(actx.destination); o.start(); o.stop(actx.currentTime+.35); },1000); }
+            function stopRing(){ if(ring)clearInterval(ring); ring=null; }
+            function conn(){
+              ws=new WebSocket(`ws://${location.host}/ws`);
+              ws.onopen=()=>{ const s=document.getElementById('st'); s.innerText='متصل به J2'; s.className='pill on'; };
+              ws.onclose=()=>{ const s=document.getElementById('st'); s.innerText='قطع شد'; s.className='pill off'; setTimeout(conn,2000); };
+              ws.onmessage=(e)=>{
+                const d=JSON.parse(e.data);
+                if(d.type==='STATUS'){
+                  document.getElementById('bat').innerText='باتری J2: '+d.battery+'%';
+                  sims=d.sims||[]; const b=document.getElementById('simBar'); b.innerHTML='';
+                  sims.forEach((s,i)=>{ if(i===0){slot=s.slot;subId=s.subId;} const btn=document.createElement('button'); btn.className='sim'+(i===0?' active':''); btn.innerText='SIM '+(s.slot+1)+': '+s.carrier; btn.onclick=()=>{ document.querySelectorAll('.sim').forEach(x=>x.classList.remove('active')); btn.classList.add('active'); slot=s.slot; subId=s.subId; }; b.appendChild(btn); });
+                } else if(d.type==='INCOMING_CALL'){
+                  document.getElementById('cName').innerText=d.name||d.number; document.getElementById('cNum').innerText=d.number; document.getElementById('modal').style.display='flex'; startRing();
+                } else if(d.type==='CALL_ENDED'){
+                  document.getElementById('modal').style.display='none'; stopRing();
+                } else if(d.type==='USSD_RESULT'){
+                  const u=document.getElementById('ussdBox'); u.style.display='block'; u.innerText=d.message;
+                } else if(d.type==='SMS_LIST'){
+                  document.getElementById('smsList').innerHTML=(d.items||[]).map(m=>{
+                    const otp=m.smsType===1?(m.body.match(/\b\d{4,8}\b/)||[])[0]:null;
+                    return `<div class="sms"><div style="display:flex;justify-content:space-between;color:var(--blue);font-size:13px;margin-bottom:6px;"><b>${m.name}</b><span>${m.smsType===1?'دریافتی':'ارسالی'}</span></div><div>${m.body}</div>${otp?`<button class="otp" onclick="navigator.clipboard.writeText('${otp}');this.innerText='کپی شد: ${otp}'">کپی کد: ${otp}</button>`:''}</div>`;
+                  }).join('');
+                }
+              };
+            }
+            function dial(){ const n=document.getElementById('num').value.trim(); if(!n)return; if(n.startsWith('*')){const u=document.getElementById('ussdBox');u.style.display='block';u.innerText='در حال دریافت پاسخ...';} ws.send(JSON.stringify({cmd:'DIAL',number:n,slot,subId})); }
+            function sendSms(){ const to=document.getElementById('to').value.trim(), text=document.getElementById('txt').value.trim(); if(!to||!text)return; ws.send(JSON.stringify({cmd:'SEND_SMS',to,text,subId})); document.getElementById('txt').value=''; }
+            function act(c){ ws.send(JSON.stringify({cmd:c})); document.getElementById('modal').style.display='none'; stopRing(); }
+            conn();
+          </script>
+          </body>
+          </html>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/example/j2ibridge/J2BridgeService.kt
+          package com.example.j2ibridge
+
+          import android.app.*
+          import android.content.*
+          import android.net.Uri
+          import android.os.*
+          import android.provider.*
+          import android.telephony.*
+          import fi.iki.elonen.*
+          import org.json.*
+          import java.io.IOException
+          import java.util.concurrent.CopyOnWriteArrayList
+
+          class J2BridgeService : Service() {
+              companion object { var instance: J2BridgeService? = null }
+              private var server: BridgeServer? = null
+
+              override fun onCreate() {
+                  super.onCreate()
+                  instance = this
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                      val ch = NotificationChannel("j2b", "J2 iBridge", NotificationManager.IMPORTANCE_LOW)
+                      getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+                      startForeground(1, Notification.Builder(this, "j2b").setContentTitle("J2 iBridge فعال است").setSmallIcon(android.R.drawable.stat_sys_data_bluetooth).build())
+                  } else {
+                      @Suppress("DEPRECATION")
+                      startForeground(1, Notification.Builder(this).setContentTitle("J2 iBridge فعال است").setSmallIcon(android.R.drawable.stat_sys_data_bluetooth).build())
+                  }
+                  server = BridgeServer(8080).apply { start(0, false) }
+              }
+
+              fun broadcast(json: JSONObject) { server?.sendAll(json.toString()) }
+
+              private inner class BridgeServer(port: Int) : NanoWSD(port) {
+                  private val sockets = CopyOnWriteArrayList<ClientWS>()
+                  fun sendAll(s: String) { sockets.forEach { try { if (it.isOpen) it.send(s) } catch (_: Exception) {} } }
+
+                  override fun serveHttp(session: IHTTPSession): Response {
+                      val html = assets.open("client.html").bufferedReader().use { it.readText() }
+                      return newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", html)
+                  }
+
+                  override fun openWebSocket(handshake: IHTTPSession): WebSocket = ClientWS(handshake)
+
+                  private inner class ClientWS(h: IHTTPSession) : WebSocket(h) {
+                      override fun onOpen() {
+                          sockets.add(this)
+                          send(getStatusJson().toString())
+                          send(getSmsJson().toString())
+                      }
+                      override fun onClose(c: WebSocketFrame.CloseCode?, r: String?, rem: Boolean) { sockets.remove(this) }
+                      override fun onMessage(m: WebSocketFrame) {
+                          val j = JSONObject(m.textPayload)
+                          when (j.optString("cmd")) {
+                              "DIAL" -> dialJ2(j.getString("number"), j.optInt("slot", 0), j.optInt("subId", -1))
+                              "ANSWER" -> callReflect("answerRingingCall")
+                              "REJECT" -> callReflect("endCall")
+                              "SEND_SMS" -> sendSmsJ2(j.getString("to"), j.getString("text"), j.optInt("subId", -1))
+                          }
+                      }
+                      override fun onPong(p: WebSocketFrame) {}
+                      override fun onException(e: IOException) { sockets.remove(this) }
+                  }
+              }
+
+              private fun getStatusJson(): JSONObject {
+                  val bm = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+                  val bat = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                  val sims = JSONArray()
+                  SubscriptionManager.from(this).activeSubscriptionInfoList?.forEach {
+                      sims.put(JSONObject().apply {
+                          put("slot", it.simSlotIndex)
+                          put("subId", it.subscriptionId)
+                          put("carrier", it.carrierName?.toString() ?: "SIM ${it.simSlotIndex + 1}")
+                      })
+                  }
+                  return JSONObject().apply { put("type", "STATUS"); put("battery", bat); put("sims", sims) }
+              }
+
+              private fun dialJ2(num: String, slot: Int, subId: Int) {
+                  val i = Intent(Intent.ACTION_CALL, Uri.parse("tel:${Uri.encode(num)}")).apply {
+                      addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                      putExtra("com.android.phone.force.slot", true)
+                      putExtra("com.android.phone.extra.slot", slot)
+                      putExtra("simSlot", slot)
+                      if (subId != -1) putExtra("subscription", subId)
+                  }
+                  startActivity(i)
+              }
+
+              private fun callReflect(method: String) {
+                  try {
+                      val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+                      val m = tm.javaClass.getDeclaredMethod("getITelephony").apply { isAccessible = true }
+                      val itel = m.invoke(tm)
+                      itel.javaClass.getDeclaredMethod(method).invoke(itel)
+                  } catch (_: Exception) {}
+              }
+
+              private fun sendSmsJ2(to: String, text: String, subId: Int) {
+                  @Suppress("DEPRECATION")
+                  val sms = if (subId != -1) SmsManager.getSmsManagerForSubscriptionId(subId) else SmsManager.getDefault()
+                  sms.sendMultipartTextMessage(to, null, sms.divideMessage(text), null, null)
+                  Handler(Looper.getMainLooper()).postDelayed({ broadcast(getSmsJson()) }, 1500)
+              }
+
+              fun resolveName(num: String): String {
+                  if (num.isBlank()) return "ناشناس"
+                  val u = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(num))
+                  contentResolver.query(u, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)?.use {
+                      if (it.moveToFirst()) return it.getString(0)
+                  }
+                  return num
+              }
+
+              fun getSmsJson(): JSONObject {
+                  val arr = JSONArray()
+                  contentResolver.query(Telephony.Sms.CONTENT_URI, arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.TYPE), null, null, "${Telephony.Sms.DATE} DESC")?.use { c ->
+                      var n = 0
+                      while (c.moveToNext() && n < 30) {
+                          val a = c.getString(0) ?: ""
+                          arr.put(JSONObject().apply { put("address", a); put("name", resolveName(a)); put("body", c.getString(1) ?: ""); put("smsType", c.getInt(2)) })
+                          n++
+                      }
+                  }
+                  return JSONObject().apply { put("type", "SMS_LIST"); put("items", arr) }
+              }
+
+              override fun onBind(i: Intent?): IBinder? = null
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/example/j2ibridge/EventReceiver.kt
+          package com.example.j2ibridge
+
+          import android.content.*
+          import android.provider.Telephony
+          import android.telephony.TelephonyManager
+          import org.json.JSONObject
+
+          class EventReceiver : BroadcastReceiver() {
+              override fun onReceive(ctx: Context, intent: Intent) {
+                  val b = J2BridgeService.instance ?: return
+                  if (intent.action == TelephonyManager.ACTION_PHONE_STATE_CHANGED) {
+                      val st = intent.getStringExtra(TelephonyManager.EXTRA_STATE)
+                      val num = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER) ?: "ناشناس"
+                      if (st == TelephonyManager.EXTRA_STATE_RINGING) {
+                          b.broadcast(JSONObject().apply { put("type", "INCOMING_CALL"); put("number", num); put("name", b.resolveName(num)) })
+                      } else if (st == TelephonyManager.EXTRA_STATE_IDLE) {
+                          b.broadcast(JSONObject().apply { put("type", "CALL_ENDED") })
+                      }
+                  } else if (intent.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
+                      b.broadcast(b.getSmsJson())
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/example/j2ibridge/UssdService.kt
+          package com.example.j2ibridge
+
+          import android.accessibilityservice.AccessibilityService
+          import android.view.accessibility.AccessibilityEvent
+          import org.json.JSONObject
+
+          class UssdService : AccessibilityService() {
+              override fun onAccessibilityEvent(e: AccessibilityEvent?) {
+                  val txt = e?.text?.joinToString("\n") ?: return
+                  if (txt.length > 3) {
+                      J2BridgeService.instance?.broadcast(JSONObject().apply { put("type", "USSD_RESULT"); put("message", txt) })
+                  }
+              }
+              override fun onInterrupt() {}
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/example/j2ibridge/MainActivity.kt
+          package com.example.j2ibridge
+
+          import android.content.*
+          import android.graphics.*
+          import android.os.*
+          import android.provider.Settings
+          import android.view.Gravity
+          import android.widget.*
+          import androidx.appcompat.app.AppCompatActivity
+          import com.google.zxing.*
+          import com.google.zxing.qrcode.QRCodeWriter
+
+          class MainActivity : AppCompatActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  val svc = Intent(this, J2BridgeService::class.java)
+                  if (Build.VERSION.SDK_INT >= 26) startForegroundService(svc) else startService(svc)
+
+                  val url = "http://192.168.44.1:8080"
+                  val layout = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setPadding(40, 40, 40, 40)
+                  }
+
+                  val qr = ImageView(this).apply {
+                      val m = QRCodeWriter().encode(url, BarcodeFormat.QR_CODE, 550, 550)
+                      val bmp = Bitmap.createBitmap(550, 550, Bitmap.Config.RGB_565)
+                      for (x in 0 until 550) for (y in 0 until 550) bmp.setPixel(x, y, if (m[x, y]) Color.BLACK else Color.WHITE)
+                      setImageBitmap(bmp)
+                  }
+
+                  val title = TextView(this).apply {
+                      text = "۱. ابتدا از دکمه زیر تترینگ بلوتوث را روشن کنید\n۲. بلوتوث آیفون را به J2 وصل کنید\n۳. این بارکد را با دوربین آیفون اسکن کنید:\n$url"
+                      textSize = 15f
+                      gravity = Gravity.CENTER
+                      setPadding(0, 24, 0, 24)
+                  }
+
+                  val btnBt = Button(this).apply {
+                      text = "باز کردن تنظیمات تترینگ بلوتوث"
+                      setOnClickListener {
+                          try {
+                              startActivity(Intent().setClassName("com.android.settings", "com.android.settings.TetherSettings"))
+                          } catch (_: Exception) {
+                              startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+                          }
+                      }
+                  }
+
+                  val btnUssd = Button(this).apply {
+                      text = "فعال‌سازی نمایش پاسخ کدهای USSD"
+                      setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                  }
+
+                  layout.addView(qr)
+                  layout.addView(title)
+                  layout.addView(btnBt)
+                  layout.addView(btnUssd)
+                  setContentView(layout)
+              }
+          }
+          EOF
+
+      - name: Build APK
+        run: |
+          gradle wrapper --gradle-version 7.5.1
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: J2-iBridge-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
